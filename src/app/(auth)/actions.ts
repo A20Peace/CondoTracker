@@ -269,7 +269,10 @@ export async function requestPasswordReset(
       error &&
       (error.code === "over_email_send_rate_limit" || error.status === 429)
     ) {
-      return { error: "Troppi tentativi, riprova tra qualche minuto." };
+      return {
+        error:
+          "Limite di invio email raggiunto. Riprova più tardi (il limite si azzera dopo circa un'ora).",
+      };
     }
     if (error) console.error("[auth] resetPasswordForEmail", error);
   } catch (err) {
