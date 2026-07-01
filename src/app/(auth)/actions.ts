@@ -19,6 +19,15 @@ export type AuthState =
   | { error: string; unverified?: boolean; email?: string }
   | null;
 
+// ─── Messaggi utente (sempre in italiano, mai l'errore tecnico grezzo) ─────────
+const GENERIC_ERROR =
+  "Si è verificato un errore imprevisto, riprova tra qualche istante";
+const NETWORK_ERROR =
+  "Impossibile contattare il server, controlla la tua connessione e riprova";
+const CONFIG_ERROR =
+  "Configurazione di Supabase mancante: completa il file .env.local con URL e chiavi del progetto, poi riavvia il server.";
+const ALREADY_REGISTERED = "Questa email è già registrata. Prova ad accedere.";
+
 function appUrl(): string {
   // Prefer the configured public URL; fall back to the request origin.
   const fromEnv = process.env.NEXT_PUBLIC_APP_URL;
@@ -27,6 +36,74 @@ function appUrl(): string {
   const proto = h.get("x-forwarded-proto") ?? "http";
   const host = h.get("host") ?? "localhost:3000";
   return `${proto}://${host}`;
+}
+
+/**
+ * True only when the Supabase env vars are present AND not the scaffold
+ * placeholders. A missing/placeholder URL is the most common cause of
+ * "fetch failed": the app tries to reach `https://REPLACE_ME.supabase.co`.
+ */
+function supabaseConfigured(): boolean {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return false;
+  if (url.includes("REPLACE_ME") || key.includes("REPLACE_ME")) return false;
+  return true;
+}
+
+/** Low-level connection failures: offline, DNS, bad URL, refused. */
+function isNetworkError(err: unknown): boolean {
+  const e = err as { name?: string; message?: string; cause?: { message?: string } };
+  const name = e?.name ?? "";
+  const haystack = `${e?.message ?? ""} ${e?.cause?.message ?? ""}`.toLowerCase();
+  return (
+    name === "AuthRetryableFetchError" ||
+    name === "TypeError" ||
+    /fetch failed|failed to fetch|network|enotfound|econnrefused|getaddrinfo|und_err/.test(
+      haystack,
+    )
+  );
+}
+
+/**
+ * Translates any Supabase/auth error into a clear Italian message.
+ * The original error is ALWAYS logged for debugging; the user only ever
+ * sees a friendly, readable string.
+ */
+function mapAuthError(err: unknown): string {
+  console.error("[auth]", err);
+
+  if (isNetworkError(err)) return NETWORK_ERROR;
+
+  const e = err as { code?: string; status?: number; message?: string };
+  const code = e?.code ?? "";
+  const status = e?.status;
+  const message = (e?.message ?? "").toLowerCase();
+
+  if (
+    code === "user_already_exists" ||
+    code === "email_exists" ||
+    /already registered|already been registered|user already exists/.test(message)
+  ) {
+    return ALREADY_REGISTERED;
+  }
+  if (
+    code === "weak_password" ||
+    (/password/.test(message) && /weak|short|at least|characters/.test(message))
+  ) {
+    return "La password non è abbastanza sicura: usa almeno 8 caratteri.";
+  }
+  if (code === "email_address_invalid" || /invalid email|email.*invalid/.test(message)) {
+    return "Inserisci un'email valida.";
+  }
+  if (
+    code === "over_email_send_rate_limit" ||
+    code === "over_request_rate_limit" ||
+    status === 429
+  ) {
+    return "Troppi tentativi, riprova tra qualche minuto.";
+  }
+  return GENERIC_ERROR;
 }
 
 export async function login(
@@ -41,8 +118,21 @@ export async function login(
     return { error: parsed.error.issues[0]?.message ?? "Dati non validi" };
   }
 
-  const supabase = createClient();
-  const { error } = await supabase.auth.signInWithPassword(parsed.data);
+  if (!supabaseConfigured()) {
+    console.error("[auth] Supabase env vars missing or still placeholders");
+    return { error: CONFIG_ERROR };
+  }
+
+  let result;
+  try {
+    const supabase = createClient();
+    result = await supabase.auth.signInWithPassword(parsed.data);
+  } catch (err) {
+    // A thrown error here is almost always a connection failure.
+    return { error: mapAuthError(err) };
+  }
+
+  const { error } = result;
   if (error) {
     // Distinguish "email not yet verified" from genuinely wrong credentials.
     if (
@@ -54,6 +144,11 @@ export async function login(
         unverified: true,
         email: parsed.data.email,
       };
+    }
+    // A connection failure must not be reported as "wrong credentials".
+    if (isNetworkError(error)) {
+      console.error("[auth]", error);
+      return { error: NETWORK_ERROR };
     }
     return { error: "Email o password non corretti" };
   }
@@ -69,14 +164,23 @@ export async function resendConfirmation(
   const parsed = z.string().email().safeParse(email);
   if (!parsed.success) return { ok: false, error: "Email non valida" };
 
-  const supabase = createClient();
-  const { error } = await supabase.auth.resend({
-    type: "signup",
-    email: parsed.data,
-    options: { emailRedirectTo: `${appUrl()}/auth/callback` },
-  });
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+  if (!supabaseConfigured()) {
+    console.error("[auth] Supabase env vars missing or still placeholders");
+    return { ok: false, error: CONFIG_ERROR };
+  }
+
+  try {
+    const supabase = createClient();
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: parsed.data,
+      options: { emailRedirectTo: `${appUrl()}/auth/callback` },
+    });
+    if (error) return { ok: false, error: mapAuthError(error) };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: mapAuthError(err) };
+  }
 }
 
 export async function register(
@@ -92,17 +196,36 @@ export async function register(
     return { error: parsed.error.issues[0]?.message ?? "Dati non validi" };
   }
 
-  const supabase = createClient();
-  const { error } = await supabase.auth.signUp({
-    email: parsed.data.email,
-    password: parsed.data.password,
-    options: {
-      data: { display_name: parsed.data.displayName },
-      emailRedirectTo: `${appUrl()}/auth/callback`,
-    },
-  });
-  if (error) {
-    return { error: error.message };
+  if (!supabaseConfigured()) {
+    console.error("[auth] Supabase env vars missing or still placeholders");
+    return { error: CONFIG_ERROR };
+  }
+
+  let result;
+  try {
+    const supabase = createClient();
+    result = await supabase.auth.signUp({
+      email: parsed.data.email,
+      password: parsed.data.password,
+      options: {
+        data: { display_name: parsed.data.displayName },
+        emailRedirectTo: `${appUrl()}/auth/callback`,
+      },
+    });
+  } catch (err) {
+    // Connection failure (e.g. unreachable Supabase URL) throws here.
+    return { error: mapAuthError(err) };
+  }
+
+  if (result.error) {
+    return { error: mapAuthError(result.error) };
+  }
+
+  // Email-enumeration protection: signing up with an already-registered email
+  // returns a user with an empty `identities` array and no error. Surface a
+  // clear message instead of silently pretending it worked.
+  if (result.data.user && result.data.user.identities?.length === 0) {
+    return { error: ALREADY_REGISTERED };
   }
 
   // If email confirmation is disabled the user is already signed in.
