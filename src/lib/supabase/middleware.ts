@@ -11,6 +11,15 @@ function isPublic(pathname: string): boolean {
   );
 }
 
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Refreshes the Supabase session cookie on every request and guards
  * protected routes. Called from `src/middleware.ts`.
@@ -18,21 +27,23 @@ function isPublic(pathname: string): boolean {
 export async function updateSession(request: NextRequest): Promise<NextResponse> {
   let response = NextResponse.next({ request });
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  // Missing env vars would otherwise throw inside createServerClient and take
-  // down every single request with a raw 500 (MIDDLEWARE_INVOCATION_FAILED).
-  // Fail loudly in the logs but let the request through, so at least the
-  // error surfaces from the page itself instead of the whole app going dark.
-  if (!url || !anonKey) {
+  // Missing or malformed env vars would otherwise throw inside
+  // createServerClient and take down every single request with a raw 500
+  // (MIDDLEWARE_INVOCATION_FAILED). Fail loudly in the logs but let the
+  // request through, so at least the error surfaces from the page itself
+  // instead of the whole app going dark.
+  if (!supabaseUrl || !anonKey || !isValidHttpUrl(supabaseUrl)) {
     console.error(
-      "[middleware] NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY non configurate",
+      "[middleware] NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY mancanti o non valide",
+      { supabaseUrl },
     );
     return response;
   }
 
-  const supabase = createServerClient<Database>(url, anonKey, {
+  const supabase = createServerClient<Database>(supabaseUrl, anonKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
