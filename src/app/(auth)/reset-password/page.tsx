@@ -26,11 +26,14 @@ export default function ResetPasswordPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  const supabaseRef = useRef(createClient());
+  // Created lazily in the browser only. Instantiating the Supabase client at
+  // render time would also run it during the server prerender at build, where
+  // NEXT_PUBLIC_SUPABASE_URL isn't available and createBrowserClient throws.
+  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
 
   // Establish the recovery session from the URL (fragment or ?code=).
   useEffect(() => {
-    const supabase = supabaseRef.current;
+    const supabase = (supabaseRef.current ??= createClient());
     let settled = false;
     const ready = () => {
       settled = true;
@@ -73,8 +76,13 @@ export default function ResetPasswordPage() {
       return;
     }
 
-    setSaving(true);
     const supabase = supabaseRef.current;
+    if (!supabase) {
+      setError("Sessione di recupero non pronta. Ricarica la pagina e riprova.");
+      return;
+    }
+
+    setSaving(true);
     const { error } = await supabase.auth.updateUser({ password });
     setSaving(false);
 
