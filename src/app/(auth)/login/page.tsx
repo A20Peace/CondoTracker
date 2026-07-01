@@ -29,6 +29,7 @@ function LoginForm() {
   const [state, formAction] = useFormState<AuthState, FormData>(login, null);
   const searchParams = useSearchParams();
   const urlError = searchParams.get("error");
+  const resetOk = searchParams.get("reset") === "1";
 
   return (
     <div>
@@ -36,6 +37,12 @@ function LoginForm() {
       <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
         Accedi per gestire condomini, spese e quote.
       </p>
+
+      {resetOk && (
+        <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+          Password aggiornata. Accedi con la nuova password.
+        </p>
+      )}
 
       {state?.unverified ? (
         <UnverifiedNotice email={state.email ?? ""} />

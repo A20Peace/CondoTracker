@@ -3,7 +3,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import type { Database } from "@/types/database";
 
 /** Routes that do NOT require an authenticated session. */
-const PUBLIC_PREFIXES = ["/login", "/register", "/forgot-password", "/auth"];
+const PUBLIC_PREFIXES = [
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+  "/auth",
+];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PREFIXES.some(
