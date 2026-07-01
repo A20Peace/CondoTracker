@@ -265,7 +265,7 @@ export async function requestPasswordReset(
   try {
     const supabase = createClient();
     const { error } = await supabase.auth.resetPasswordForEmail(parsed.data, {
-      redirectTo: `${appUrl()}/auth/callback?next=/reset-password`,
+      redirectTo: `${appUrl()}/auth/reset`,
     });
     // Rate-limit errors are worth surfacing; everything else is swallowed so
     // we don't leak whether the address is registered.
