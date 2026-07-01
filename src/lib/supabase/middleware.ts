@@ -18,10 +18,21 @@ function isPublic(pathname: string): boolean {
 export async function updateSession(request: NextRequest): Promise<NextResponse> {
   let response = NextResponse.next({ request });
 
-  const supabase = createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  // Missing env vars would otherwise throw inside createServerClient and take
+  // down every single request with a raw 500 (MIDDLEWARE_INVOCATION_FAILED).
+  // Fail loudly in the logs but let the request through, so at least the
+  // error surfaces from the page itself instead of the whole app going dark.
+  if (!url || !anonKey) {
+    console.error(
+      "[middleware] NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY non configurate",
+    );
+    return response;
+  }
+
+  const supabase = createServerClient<Database>(url, anonKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
