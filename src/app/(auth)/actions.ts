@@ -19,6 +19,13 @@ export type AuthState =
   | { error: string; unverified?: boolean; email?: string }
   | null;
 
+/** State for the "forgot password" request form (no redirect on success). */
+export type ResetRequestState = { error?: string; sent?: boolean } | null;
+
+const passwordSchema = z.object({
+  password: z.string().min(8, "La password deve avere almeno 8 caratteri"),
+});
+
 // ─── Messaggi utente (sempre in italiano, mai l'errore tecnico grezzo) ─────────
 const GENERIC_ERROR =
   "Si è verificato un errore imprevisto, riprova tra qualche istante";
@@ -229,6 +236,96 @@ export async function register(
   }
 
   // If email confirmation is disabled the user is already signed in.
+  revalidatePath("/", "layout");
+  redirect("/home");
+}
+
+/**
+ * Sends a password-reset email. The link lands on /auth/callback which
+ * exchanges the code for a short-lived recovery session and redirects to
+ * /reset-password. For privacy we never reveal whether the email exists.
+ */
+export async function requestPasswordReset(
+  _prev: ResetRequestState,
+  formData: FormData,
+): Promise<ResetRequestState> {
+  const parsed = z
+    .string()
+    .email("Inserisci un'email valida")
+    .safeParse(formData.get("email"));
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Email non valida" };
+  }
+
+  if (!supabaseConfigured()) {
+    console.error("[auth] Supabase env vars missing or still placeholders");
+    return { error: CONFIG_ERROR };
+  }
+
+  try {
+    const supabase = createClient();
+    const { error } = await supabase.auth.resetPasswordForEmail(parsed.data, {
+      redirectTo: `${appUrl()}/auth/callback?next=/reset-password`,
+    });
+    // Rate-limit errors are worth surfacing; everything else is swallowed so
+    // we don't leak whether the address is registered.
+    if (
+      error &&
+      (error.code === "over_email_send_rate_limit" || error.status === 429)
+    ) {
+      return { error: "Troppi tentativi, riprova tra qualche minuto." };
+    }
+    if (error) console.error("[auth] resetPasswordForEmail", error);
+  } catch (err) {
+    return { error: mapAuthError(err) };
+  }
+
+  return { sent: true };
+}
+
+/**
+ * Sets a new password for the currently signed-in user. Used both by the
+ * recovery flow (after the email link established a session) and, in theory,
+ * from within the app.
+ */
+export async function updatePassword(
+  _prev: AuthState,
+  formData: FormData,
+): Promise<AuthState> {
+  const parsed = passwordSchema.safeParse({
+    password: formData.get("password"),
+  });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Password non valida" };
+  }
+
+  if (!supabaseConfigured()) {
+    console.error("[auth] Supabase env vars missing or still placeholders");
+    return { error: CONFIG_ERROR };
+  }
+
+  let result;
+  try {
+    const supabase = createClient();
+    result = await supabase.auth.updateUser({ password: parsed.data.password });
+  } catch (err) {
+    return { error: mapAuthError(err) };
+  }
+
+  if (result.error) {
+    const { code, message } = result.error;
+    if (
+      code === "session_not_found" ||
+      /session|not authenticated|auth session missing/i.test(message)
+    ) {
+      return {
+        error:
+          "Il link di reset è scaduto o non valido. Richiedine uno nuovo dalla pagina di accesso.",
+      };
+    }
+    return { error: mapAuthError(result.error) };
+  }
+
   revalidatePath("/", "layout");
   redirect("/home");
 }
